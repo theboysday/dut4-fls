@@ -1,0 +1,215 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>DUT4 Riser Hotzone Overlay Tester</title>
+<style>
+  :root { --bg:#0b1220; --card:#111827; --ink:#e5e7eb; --muted:#94a3b8; --accent:#22d3ee; --accent2:#f59e0b; }
+  body{margin:0;background:var(--bg);color:var(--ink);font-family:system-ui,Segoe UI,Roboto,Helvetica,Arial,sans-serif}
+  .wrap{display:grid;grid-template-columns:320px 1fr;gap:16px;min-height:100vh}
+  .panel{background:var(--card);padding:16px 14px;border-radius:16px;box-shadow:0 8px 30px rgba(0,0,0,.35)}
+  .panel h2{margin:0 0 8px;font-size:18px}
+  .panel small{color:var(--muted)}
+  .controls{display:grid;gap:10px}
+  label{display:block;font-size:12px;color:var(--muted);margin-bottom:4px}
+  input, textarea, select{width:100%;box-sizing:border-box;background:#0f172a;color:var(--ink);border:1px solid #1f2937;border-radius:10px;padding:10px}
+  button{background:#2563eb;color:white;border:none;border-radius:10px;padding:10px 12px;cursor:pointer}
+  button.ghost{background:transparent;border:1px solid #334155}
+  .stageCard{position:relative;overflow:hidden;border-radius:16px;background:#0f172a;box-shadow:0 8px 30px rgba(0,0,0,.35);margin:16px;padding:0}
+  .stage{position:relative;max-width:100%;height:calc(100vh - 48px);}
+  .stage img{position:absolute;inset:0;object-fit:contain;width:100%;height:100%}
+  .box{position:absolute;border:2px solid var(--accent);background:rgba(34,211,238,.15);border-radius:8px;touch-action:none}
+  .box[data-dock="true"]{border-color:var(--accent2);background:rgba(245,158,11,.18)}
+  .box .label{position:absolute;left:6px;top:4px;background:rgba(0,0,0,.55);padding:2px 6px;border-radius:6px;font-size:12px}
+  .hint{position:absolute;right:10px;top:10px;background:rgba(0,0,0,.45);padding:6px 10px;border-radius:8px;font-size:12px;color:#cbd5e1}
+  .footer{position:sticky;bottom:0;background:linear-gradient(180deg, rgba(11,18,32,0) 0%, rgba(11,18,32,1) 45%);padding:12px 16px}
+  pre{white-space:pre-wrap;background:#0b1022;padding:10px;border-radius:12px;border:1px solid #1f2937}
+  @media (max-width: 900px){ .wrap{grid-template-columns:1fr} .stage{height:60vh} }
+</style>
+</head>
+<body>
+  <div class="wrap">
+    <aside class="panel">
+      <h2>Overlay Controls</h2>
+      <div class="controls">
+        <div>
+          <label>Map Image URL</label>
+          <input id="imgUrl" placeholder="Paste map image URL here" />
+        </div>
+        <div>
+          <label>Load image from your device</label>
+          <input id="imgFile" type="file" accept="image/*" />
+        </div>
+        <div>
+          <label>Selected Riser</label>
+          <select id="sel"></select>
+        </div>
+        <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:8px">
+          <div><label>x%</label><input id="x" type="number" step="0.1"></div>
+          <div><label>y%</label><input id="y" type="number" step="0.1"></div>
+          <div><label>w%</label><input id="w" type="number" step="0.1"></div>
+          <div><label>h%</label><input id="h" type="number" step="0.1"></div>
+        </div>
+        <div style="display:flex;gap:8px">
+          <button id="apply">Apply</button>
+          <button id="nudgeUp" class="ghost">↑</button>
+          <button id="nudgeDown" class="ghost">↓</button>
+          <button id="nudgeLeft" class="ghost">←</button>
+          <button id="nudgeRight" class="ghost">→</button>
+        </div>
+        <div>
+          <label>Generated RISERS array</label>
+          <textarea id="out" rows="12" readonly></textarea>
+        </div>
+      </div>
+      <div class="footer">
+        <small>Tips: Drag boxes directly on the map (touch or mouse). Use arrow buttons to nudge by 0.5%. Copy the array below into your app.</small>
+      </div>
+    </aside>
+
+    <main class="stageCard">
+      <div class="stage" id="stage">
+        <div class="hint">Drag rectangles to adjust. Tap to select.</div>
+        <img id="mapImg" alt="Zone Map" />
+      </div>
+    </main>
+  </div>
+
+<script>
+const stage = document.getElementById('stage');
+const mapImg = document.getElementById('mapImg');
+const sel = document.getElementById('sel');
+const xI = document.getElementById('x');
+const yI = document.getElementById('y');
+const wI = document.getElementById('w');
+const hI = document.getElementById('h');
+const out = document.getElementById('out');
+
+// Initial RISERS from your latest layout
+let risers = [
+  { id: "r1", name: "Riser 1", area: "Launch Pad Southwest", bbox: [11.1, 22.56, 10, 14] },
+  { id: "r2", name: "Riser 2", area: "Launch Pad Southwest", bbox: [22.09, 21.59, 10, 14] },
+  { id: "r3", name: "Riser 3", area: "Launch Pad Southwest", bbox: [25.17, 22.77, 10, 14] },
+  { id: "r4", name: "Riser 4", area: "Launch Pad Northwest", bbox: [57.31, 23.29, 10, 14] },
+  { id: "r6", name: "Riser 6", area: "Launch Pad Northwest", bbox: [46.54, 23.15, 10, 14], dock:true },
+  { id: "r5", name: "Riser 5", area: "Break Room / Launch Pad Northeast", bbox: [85.97, 21.72, 12, 16] },
+  { id: "r7", name: "Riser 7", area: "Launch Pad Northeast", bbox: [49.03, 84, 12, 16] },
+  { id: "r8", name: "Riser 8", area: "Launch Pad Southeast", bbox: [35.71, 84, 12, 16], dock:true },
+  { id: "r9", name: "Riser 9", area: "Dock Area", bbox: [0, 21.44, 10, 18], dock:true }
+];
+
+function refreshSelect(){
+  sel.innerHTML = '';
+  risers.forEach((r,i)=>{
+    const o = document.createElement('option');
+    o.value = i; o.textContent = `${r.name} — ${r.area}`; sel.appendChild(o);
+  });
+}
+
+function draw(){
+  Array.from(stage.querySelectorAll('.box')).forEach(n=>n.remove());
+  const rect = stage.getBoundingClientRect();
+  risers.forEach((r,i)=>{
+    const [x,y,w,h] = r.bbox;
+    const el = document.createElement('div');
+    el.className = 'box';
+    if(r.dock) el.setAttribute('data-dock','true');
+    el.style.left = x + '%';
+    el.style.top = y + '%';
+    el.style.width = w + '%';
+    el.style.height = h + '%';
+    el.dataset.index = i;
+    const lab = document.createElement('div');
+    lab.className = 'label';
+    lab.textContent = r.name;
+    el.appendChild(lab);
+
+    // drag
+    let start = null;
+    const onPointerDown = (e)=>{
+      start = { x:e.clientX, y:e.clientY, bx:x, by:y };
+      el.setPointerCapture(e.pointerId);
+      sel.value = i;
+      updateFields(i);
+    };
+    const onPointerMove = (e)=>{
+      if(!start) return;
+      const dx = ((e.clientX - start.x)/rect.width)*100;
+      const dy = ((e.clientY - start.y)/rect.height)*100;
+      r.bbox[0] = clamp(start.bx + dx, 0, 100 - r.bbox[2]);
+      r.bbox[1] = clamp(start.by + dy, 0, 100 - r.bbox[3]);
+      el.style.left = r.bbox[0] + '%';
+      el.style.top = r.bbox[1] + '%';
+      emit();
+    };
+    const onPointerUp = ()=>{ start = null; };
+    el.addEventListener('pointerdown', onPointerDown);
+    el.addEventListener('pointermove', onPointerMove);
+    el.addEventListener('pointerup', onPointerUp);
+
+    stage.appendChild(el);
+  });
+  emit();
+}
+
+function updateFields(i){
+  const [x,y,w,h] = risers[i].bbox;
+  xI.value = x; yI.value = y; wI.value = w; hI.value = h;
+}
+
+function emit(){
+  out.value = 'const RISERS = [' + risers.map(r=>`\n  { id: "${r.id}", name: "${r.name}", area: "${r.area}", bbox: [${r.bbox.map(n=>Number(n.toFixed(2))).join(', ')}]${r.dock ? ", dock:true" : ""} }`).join(',') + '\n];';
+}
+
+function clamp(v, min, max){ return Math.max(min, Math.min(max, v)); }
+
+sel.addEventListener('change', ()=> updateFields(Number(sel.value)) );
+
+function apply(){
+  const i = Number(sel.value);
+  if(isNaN(i)) return;
+  risers[i].bbox = [Number(xI.value), Number(yI.value), Number(wI.value), Number(hI.value)];
+  draw();
+}
+
+function nudge(dx,dy){
+  const i = Number(sel.value); if(isNaN(i)) return;
+  const b = risers[i].bbox; b[0]=clamp(b[0]+dx,0,100-b[2]); b[1]=clamp(b[1]+dy,0,100-b[3]);
+  updateFields(i); draw();
+}
+
+document.getElementById('apply').onclick = apply;
+['nudgeUp','nudgeDown','nudgeLeft','nudgeRight'].forEach(id=>{
+  document.getElementById(id).onclick = ()=>{
+    if(id==='nudgeUp') nudge(0,-0.5);
+    if(id==='nudgeDown') nudge(0,0.5);
+    if(id==='nudgeLeft') nudge(-0.5,0);
+    if(id==='nudgeRight') nudge(0.5,0);
+  };
+});
+
+// image loader
+function setImg(url){ mapImg.src = url; imgUrl.value = url; }
+
+// local file loader
+const imgFile = document.getElementById('imgFile');
+imgFile.addEventListener('change', ()=>{
+  const f = imgFile.files && imgFile.files[0];
+  if(!f) return;
+  const reader = new FileReader();
+  reader.onload = (ev)=> setImg(ev.target.result);
+  reader.readAsDataURL(f);
+});
+
+const imgUrl = document.getElementById('imgUrl');
+imgUrl.addEventListener('change', ()=> setImg(imgUrl.value.trim()) );
+
+// default placeholder
+setImg('https://placehold.co/1600x900?text=DUT4+Zone+Map+Placeholder');
+
+refreshSelect();
+sel.value = 0; updateFields(0); draw();
+</script>
+</body>
+</html>
